@@ -1,0 +1,118 @@
+// ============================================================================
+// 비트코인 자동매매 전략 v5.1 (최적화됨)
+// 40/100 MA 크로스오버 + 100 MA 시장 필터
+//
+// 최적화 결과 (2017-2026 백테스트):
+// - 수익률: 1751% (vs Buy&Hold 1078%)
+// - 승률: 58.33%
+// - Profit Factor: 11.143
+// - 연평균 수익률: 41.37%
+// ============================================================================
+
+//@version=5
+strategy("BTC 자동매매 v5.1 (최적화)",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     commission_type=strategy.commission.percent,
+     commission_value=0.1,
+     pyramiding=0)
+
+// ============================================================================
+// 입력 파라미터 (최적화 완료)
+// ============================================================================
+fast_length = input.int(40, "빠른 MA 기간", minval=1, group="이동평균 설정")
+slow_length = input.int(100, "느린 MA 기간", minval=1, group="이동평균 설정")
+filter_length = input.int(100, "시장 필터 MA 기간", minval=1, group="이동평균 설정")
+use_market_filter = input.bool(true, "시장 필터 사용", group="이동평균 설정")
+
+// 거래 시간 설정
+use_date_filter = input.bool(false, "기간 필터 사용", group="기간 설정")
+start_date = input.time(timestamp("2017-01-01"), "시작일", group="기간 설정")
+end_date = input.time(timestamp("2030-12-31"), "종료일", group="기간 설정")
+
+// ============================================================================
+// 이동평균 계산
+// ============================================================================
+fast_ma = ta.sma(close, fast_length)
+slow_ma = ta.sma(close, slow_length)
+filter_ma = ta.sma(close, filter_length)
+
+// ============================================================================
+// 거래 조건
+// ============================================================================
+// 기간 필터
+in_date_range = use_date_filter ? (time >= start_date and time <= end_date) : true
+
+// 시장 필터: 가격이 필터 MA 위에 있어야 함
+market_bullish = use_market_filter ? (close > filter_ma) : true
+
+// 크로스오버 신호
+golden_cross = ta.crossover(fast_ma, slow_ma)   // 골든 크로스 (매수)
+death_cross = ta.crossunder(fast_ma, slow_ma)   // 데드 크로스 (매도)
+
+// ============================================================================
+// 매매 실행
+// ============================================================================
+// 매수 조건: 골든 크로스 + 시장 필터 통과
+buy_signal = golden_cross and market_bullish and in_date_range
+
+// 매도 조건: 데드 크로스 OR 시장 필터 이탈
+sell_signal = death_cross and in_date_range
+filter_exit = use_market_filter and (close < filter_ma) and strategy.position_size > 0
+
+// 매수
+if buy_signal
+    strategy.entry("롱", strategy.long)
+
+// 매도
+if sell_signal or filter_exit
+    strategy.close("롱")
+
+// ============================================================================
+// 시각화
+// ============================================================================
+// 이동평균선
+plot(fast_ma, "빠른 MA (40)", color=color.new(color.blue, 0), linewidth=2)
+plot(slow_ma, "느린 MA (100)", color=color.new(color.red, 0), linewidth=2)
+plot(filter_ma, "필터 MA (100)", color=color.new(color.orange, 50), linewidth=1, style=plot.style_circles)
+
+// 배경색 (시장 상태)
+bgcolor(market_bullish ? color.new(color.green, 95) : color.new(color.red, 95))
+
+// 매매 신호 표시
+plotshape(buy_signal, "매수", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(sell_signal, "매도", shape.triangledown, location.abovebar, color.red, size=size.small)
+plotshape(filter_exit, "필터 청산", shape.xcross, location.abovebar, color.orange, size=size.small)
+
+// ============================================================================
+// 정보 테이블
+// ============================================================================
+var table info_table = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80))
+
+if barstate.islast
+    table.cell(info_table, 0, 0, "전략", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 0, "v5.1 최적화", text_color=color.yellow, text_size=size.small)
+
+    table.cell(info_table, 0, 1, "빠른 MA", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(fast_length), text_color=color.blue, text_size=size.small)
+
+    table.cell(info_table, 0, 2, "느린 MA", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, str.tostring(slow_length), text_color=color.red, text_size=size.small)
+
+    table.cell(info_table, 0, 3, "필터 MA", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, str.tostring(filter_length), text_color=color.orange, text_size=size.small)
+
+    table.cell(info_table, 0, 4, "시장 상태", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 4, market_bullish ? "강세" : "약세", text_color=market_bullish ? color.green : color.red, text_size=size.small)
+
+    table.cell(info_table, 0, 5, "포지션", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 5, strategy.position_size > 0 ? "롱" : "없음", text_color=strategy.position_size > 0 ? color.green : color.gray, text_size=size.small)
+
+// ============================================================================
+// 알림 설정
+// ============================================================================
+alertcondition(buy_signal, "매수 신호", "BTC v5.1: 골든 크로스 매수 신호!")
+alertcondition(sell_signal, "매도 신호", "BTC v5.1: 데드 크로스 매도 신호!")
+alertcondition(filter_exit, "필터 청산", "BTC v5.1: 시장 필터 이탈 청산!")

@@ -1,0 +1,36 @@
+# 환경변수 및 민감 정보 (절대 업로드 금지!)
+.env
+.env.local
+.env.production
+*.pem
+*.key
+credentials.json
+
+# API 키가 포함될 수 있는 파일
+config.py
+secrets.py
+
+# 로그 파일
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 백테스트 결과
+*.html
+backtest_results/

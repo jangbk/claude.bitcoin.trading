@@ -1,0 +1,29 @@
+[Unit]
+Description=Bitcoin Trading Bot v5.1
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+Environment="PATH=/home/ubuntu/trading-bot/venv/bin"
+ExecStart=/home/ubuntu/trading-bot/venv/bin/python3 bithumb_trading_bot.py
+
+# 자동 재시작 설정
+Restart=always
+RestartSec=10
+
+# 로그 설정
+StandardOutput=append:/home/ubuntu/trading-bot/bot_stdout.log
+StandardError=append:/home/ubuntu/trading-bot/bot_stderr.log
+
+# 보안 설정
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/trading-bot
+
+[Install]
+WantedBy=multi-user.target
