@@ -34,3 +34,5 @@ env/
 # 백테스트 결과
 *.html
 backtest_results/
+oracle_ssh_key_BACKUP.key
+*.key
