@@ -49,10 +49,10 @@ class Config:
     CHECK_INTERVAL = 60         # 1시간마다 체크 (일봉 전략이므로)
 
     # 테스트 모드 (True: 실제 주문 안 함)
-    TEST_MODE = True
+    TEST_MODE = False
 
     # 텔레그램 알림 설정
-    TELEGRAM_ENABLED = False    # True로 변경하면 알림 활성화
+    TELEGRAM_ENABLED = True    # True로 변경하면 알림 활성화
     TELEGRAM_TOKEN = ""         # @BotFather에서 받은 토큰
     TELEGRAM_CHAT_ID = ""       # @userinfobot에서 확인한 Chat ID
 
