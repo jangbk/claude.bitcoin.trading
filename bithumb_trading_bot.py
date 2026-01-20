@@ -1,6 +1,7 @@
 """
-빗썸 비트코인 자동매매 봇 v5.1
+빗썸 비트코인 자동매매 봇 v5.2
 40/100 MA 크로스오버 + 100 MA 시장 필터
++ 텔레그램 매시간 알림 + 일일 리포트
 
 사용법:
 1. .env 파일에 API 키 설정
@@ -42,7 +43,7 @@ class Config:
 
     # 거래 설정
     TICKER = "BTC"              # 거래 종목
-    TRADE_AMOUNT_PERCENT = 0.70 # 잔고의 99% 사용 (수수료 고려)
+    TRADE_AMOUNT_PERCENT = 0.70 # 잔고의 70% 사용
     MIN_TRADE_AMOUNT = 10000    # 최소 거래 금액 (원)
 
     # 실행 주기 (분)
@@ -52,9 +53,13 @@ class Config:
     TEST_MODE = False
 
     # 텔레그램 알림 설정
-    TELEGRAM_ENABLED = True    # True로 변경하면 알림 활성화
-    TELEGRAM_TOKEN = ""         # @BotFather에서 받은 토큰
-    TELEGRAM_CHAT_ID = ""       # @userinfobot에서 확인한 Chat ID
+    TELEGRAM_ENABLED = True
+    TELEGRAM_TOKEN = ""
+    TELEGRAM_CHAT_ID = ""
+
+    # 알림 설정
+    HOURLY_REPORT = True        # 매시간 상태 알림
+    DAILY_REPORT = True         # 일일 리포트 (09:00 KST)
 
 
 # ============================================================================
@@ -65,14 +70,18 @@ def send_telegram(message: str):
     if not Config.TELEGRAM_ENABLED:
         return
 
-    if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
+    # .env에서 토큰 읽기
+    token = os.getenv("TELEGRAM_TOKEN", Config.TELEGRAM_TOKEN)
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", Config.TELEGRAM_CHAT_ID)
+
+    if not token or not chat_id:
         logger.warning("텔레그램 설정이 없습니다.")
         return
 
     try:
-        url = f"https://api.telegram.org/bot{Config.TELEGRAM_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         data = {
-            "chat_id": Config.TELEGRAM_CHAT_ID,
+            "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML"
         }
@@ -94,9 +103,11 @@ class BithumbTrader:
         self.bithumb = pybithumb.Bithumb(api_key, api_secret)
         self.ticker = Config.TICKER
         self.position = None  # 'long' or None
+        self.entry_price = 0  # 진입 가격
+        self.entry_time = None  # 진입 시간
 
         logger.info("=" * 60)
-        logger.info("🤖 빗썸 자동매매 봇 v5.1 시작")
+        logger.info("🤖 빗썸 자동매매 봇 v5.2 시작")
         logger.info(f"   전략: {Config.FAST_MA}/{Config.SLOW_MA} MA + {Config.FILTER_MA} MA 필터")
         logger.info(f"   종목: {self.ticker}")
         logger.info(f"   테스트 모드: {Config.TEST_MODE}")
@@ -157,6 +168,13 @@ class BithumbTrader:
         logger.info(f"   Filter MA({Config.FILTER_MA}): {filter_ma:,.0f}")
         logger.info(f"   시장 상태: {'강세' if market_bullish else '약세'}")
 
+        # 상태 저장 (알림용)
+        self.last_price = price
+        self.last_fast_ma = fast_ma
+        self.last_slow_ma = slow_ma
+        self.last_filter_ma = filter_ma
+        self.last_market_status = '강세' if market_bullish else '약세'
+
         if golden_cross and market_bullish:
             return "buy"
         elif death_cross or filter_exit:
@@ -201,8 +219,10 @@ class BithumbTrader:
             if result:
                 logger.info(f"   ✅ 매수 완료: {result}")
                 self.position = "long"
+                self.entry_price = self.last_price
+                self.entry_time = datetime.now()
                 # 텔레그램 알림
-                send_telegram(f"🟢 <b>매수 완료!</b>\n금액: {trade_amount:,.0f}원\n시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                send_telegram(f"🟢 <b>매수 완료!</b>\n금액: {trade_amount:,.0f}원\n가격: {self.last_price:,.0f}원\n시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
                 return True
             else:
                 logger.error("   ❌ 매수 실패")
@@ -242,9 +262,12 @@ class BithumbTrader:
 
             if result:
                 logger.info(f"   ✅ 매도 완료: {result}")
+                # 수익률 계산
+                profit_pct = ((current_price - self.entry_price) / self.entry_price * 100) if self.entry_price > 0 else 0
                 self.position = None
                 # 텔레그램 알림
-                send_telegram(f"🔴 <b>매도 완료!</b>\n수량: {btc:.8f} BTC\n금액: {sell_value:,.0f}원\n시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                send_telegram(f"🔴 <b>매도 완료!</b>\n수량: {btc:.8f} BTC\n금액: {sell_value:,.0f}원\n수익률: {profit_pct:+.2f}%\n시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                self.entry_price = 0
                 return True
             else:
                 logger.error("   ❌ 매도 실패")
@@ -255,6 +278,94 @@ class BithumbTrader:
             logger.error(f"매도 오류: {e}")
             send_telegram(f"⚠️ 매도 오류: {e}")
             return False
+
+    def send_hourly_report(self):
+        """매시간 상태 알림"""
+        if not Config.HOURLY_REPORT:
+            return
+
+        try:
+            balance = self.get_balance()
+            current_price = pybithumb.get_current_price(self.ticker)
+
+            # 포지션 상태
+            if self.position == "long" and balance["BTC"] > 0:
+                btc_value = balance["BTC"] * current_price
+                profit_pct = ((current_price - self.entry_price) / self.entry_price * 100) if self.entry_price > 0 else 0
+                position_str = f"🟢 롱 포지션\n   평가금액: {btc_value:,.0f}원\n   수익률: {profit_pct:+.2f}%"
+            else:
+                position_str = "⚪ 포지션 없음 (현금 보유)"
+
+            msg = f"""⏰ <b>매시간 상태 알림</b>
+━━━━━━━━━━━━━━━
+📊 BTC: {current_price:,.0f}원
+📈 40 MA: {self.last_fast_ma:,.0f}
+📉 100 MA: {self.last_slow_ma:,.0f}
+🎯 시장: {self.last_market_status}
+━━━━━━━━━━━━━━━
+{position_str}
+💰 원화: {balance['KRW']:,.0f}원
+━━━━━━━━━━━━━━━
+🕐 {datetime.now().strftime('%m/%d %H:%M')}"""
+
+            send_telegram(msg)
+        except Exception as e:
+            logger.error(f"매시간 알림 오류: {e}")
+
+    def send_daily_report(self):
+        """일일 리포트 (09:00 KST)"""
+        if not Config.DAILY_REPORT:
+            return
+
+        try:
+            balance = self.get_balance()
+            current_price = pybithumb.get_current_price(self.ticker)
+
+            # 총 자산 계산
+            btc_value = balance["BTC"] * current_price
+            total_value = balance["KRW"] + btc_value
+
+            # 24시간 가격 변동 (근사치)
+            df = self.get_ohlcv(2)
+            if df is not None and len(df) >= 2:
+                yesterday_price = df.iloc[-2]['close']
+                price_change = ((current_price - yesterday_price) / yesterday_price) * 100
+                price_change_str = f"{price_change:+.2f}%"
+            else:
+                price_change_str = "N/A"
+
+            # 포지션 상태
+            if self.position == "long" and balance["BTC"] > 0:
+                position_str = f"🟢 롱 포지션 보유 중\n   BTC: {balance['BTC']:.8f}\n   평가: {btc_value:,.0f}원"
+            else:
+                position_str = "⚪ 포지션 없음 (매수 대기)"
+
+            msg = f"""📋 <b>일일 리포트</b>
+━━━━━━━━━━━━━━━
+📅 {datetime.now().strftime('%Y년 %m월 %d일')}
+━━━━━━━━━━━━━━━
+💹 <b>BTC 현황</b>
+   현재가: {current_price:,.0f}원
+   24H 변동: {price_change_str}
+
+📊 <b>이동평균</b>
+   40 MA: {self.last_fast_ma:,.0f}
+   100 MA: {self.last_slow_ma:,.0f}
+   시장: {self.last_market_status}
+
+💼 <b>포지션</b>
+{position_str}
+
+💰 <b>자산 현황</b>
+   원화: {balance['KRW']:,.0f}원
+   BTC 평가: {btc_value:,.0f}원
+   <b>총 자산: {total_value:,.0f}원</b>
+━━━━━━━━━━━━━━━
+🤖 빗썸 자동매매 봇 v5.2"""
+
+            send_telegram(msg)
+        except Exception as e:
+            logger.error(f"일일 리포트 오류: {e}")
 
     def run(self):
         """메인 실행 로직"""
@@ -284,6 +395,9 @@ class BithumbTrader:
         # 5. 현재 잔고 출력
         balance = self.get_balance()
         logger.info(f"💰 잔고: {balance['KRW']:,.0f}원 / {balance['BTC']:.8f} BTC")
+
+        # 6. 매시간 알림 전송
+        self.send_hourly_report()
 
 
 # ============================================================================
@@ -317,11 +431,17 @@ def main():
     # 첫 실행
     trader.run()
 
-    # 스케줄 설정 (매 시간 정각에 실행)
-    schedule.every().hour.at(":00").do(trader.run)
+    # 스케줄 설정
+    schedule.every().hour.at(":00").do(trader.run)  # 매 시간 정각
+    schedule.every().day.at("00:00").do(trader.send_daily_report)  # 09:00 KST (00:00 UTC)
 
-    logger.info(f"\n🔄 스케줄러 시작 (매 시간 정각 실행)")
+    logger.info(f"\n🔄 스케줄러 시작")
+    logger.info("   - 매 시간 정각: 시장 체크 + 상태 알림")
+    logger.info("   - 매일 09:00 KST: 일일 리포트")
     logger.info("   종료하려면 Ctrl+C를 누르세요.\n")
+
+    # 시작 알림
+    send_telegram("🤖 <b>빗썸 자동매매 봇 시작!</b>\n\n✅ 매시간 상태 알림 ON\n✅ 일일 리포트 ON (09:00)")
 
     # 스케줄 루프
     while True:
@@ -330,6 +450,7 @@ def main():
             time.sleep(1)
         except KeyboardInterrupt:
             logger.info("\n👋 봇 종료")
+            send_telegram("👋 봇이 종료되었습니다.")
             break
 
 
