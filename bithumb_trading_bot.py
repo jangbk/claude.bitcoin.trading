@@ -42,7 +42,7 @@ class Config:
 
     # 거래 설정
     TICKER = "BTC"              # 거래 종목
-    TRADE_AMOUNT_PERCENT = 0.99 # 잔고의 99% 사용 (수수료 고려)
+    TRADE_AMOUNT_PERCENT = 0.70 # 잔고의 99% 사용 (수수료 고려)
     MIN_TRADE_AMOUNT = 10000    # 최소 거래 금액 (원)
 
     # 실행 주기 (분)
